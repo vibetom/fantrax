@@ -35,8 +35,20 @@
     .btn-primary { background: #059669; color: #fff; }
     .btn-primary:hover { background: #10b981; }
     .btn-primary:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .btn-download { background: #7c3aed; color: #fff; font-size: 1.1rem; padding: 14px 32px; }
+    .btn-download:hover { background: #8b5cf6; }
+    .btn-download:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
     .period-input { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; width: 80px; margin-right: 8px; }
     .controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 24px; }
+    .download-box { background: linear-gradient(135deg, #1e1b4b, #1e293b); border: 2px solid #7c3aed; border-radius: 12px; padding: 32px; margin: 0 auto 24px; max-width: 700px; text-align: center; }
+    .download-box h2 { color: #c4b5fd; margin-bottom: 8px; font-size: 1.3rem; }
+    .download-box p { color: #94a3b8; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; }
+    .download-options { display: flex; justify-content: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+    .format-toggle { display: flex; gap: 0; border: 1px solid #334155; border-radius: 6px; overflow: hidden; }
+    .format-toggle label { padding: 8px 16px; color: #94a3b8; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
+    .format-toggle input:checked + label { background: #7c3aed; color: #fff; }
+    .format-toggle input { display: none; }
+    .status-msg { margin-top: 16px; font-size: 0.85rem; color: #94a3b8; }
   </style>
 </head>
 <body>
@@ -44,11 +56,41 @@
   <p class="subtitle">Fantasy Baseball</p>
 
   <div class="tabs">
+    <button class="tab" data-tab="download">Download AI Bundle</button>
     <button class="tab active" data-tab="standings">Standings</button>
     <button class="tab" data-tab="rosters">Rosters</button>
     <button class="tab" data-tab="league">League Info</button>
     <button class="tab snapshot-tab" data-tab="snapshot">Weekly Snapshot</button>
     <button class="tab" data-tab="raw">Raw JSON</button>
+  </div>
+
+  <div id="download" class="panel">
+    <div class="download-box">
+      <h2>Download Complete AI Data Bundle</h2>
+      <p>
+        This pulls <strong>everything</strong> from your Fantrax league into one file:
+        standings, rosters, detailed player stats, matchup scoring, transactions,
+        trade blocks, draft history, and ADP data. The file includes instructions
+        telling the AI exactly what to do with it — just hand it to Claude or ChatGPT
+        and ask for your weekly recap.
+      </p>
+      <div class="controls">
+        <label style="color:#94a3b8">Period:</label>
+        <input type="number" id="dl-period" class="period-input" placeholder="current" min="1">
+      </div>
+      <div class="download-options">
+        <div class="format-toggle">
+          <input type="radio" name="dl-format" id="fmt-text" value="text" checked>
+          <label for="fmt-text">Text (.txt)</label>
+          <input type="radio" name="dl-format" id="fmt-json" value="json">
+          <label for="fmt-json">JSON (.json)</label>
+        </div>
+      </div>
+      <div style="margin-top:20px">
+        <button id="dl-btn" class="btn btn-download" onclick="downloadBundle()">Download Full Bundle</button>
+      </div>
+      <div id="dl-status" class="status-msg"></div>
+    </div>
   </div>
 
   <div id="standings" class="panel active"><div class="loading">Loading standings...</div></div>
@@ -226,6 +268,52 @@
       el.innerHTML = Object.entries(rawData).map(([k, v]) =>
         `<h3 style="color:#60a5fa;margin:12px 0 6px">/api/${k}</h3><pre>${JSON.stringify(v, null, 2)}</pre>`
       ).join('');
+    }
+
+    // Download AI bundle
+    async function downloadBundle() {
+      const btn = document.getElementById('dl-btn');
+      const status = document.getElementById('dl-status');
+      const periodInput = document.getElementById('dl-period');
+      const fmt = document.querySelector('input[name="dl-format"]:checked').value;
+
+      const period = periodInput.value ? `&period=${periodInput.value}` : '';
+      const url = `/api/ai_bundle?format=${fmt}${period}`;
+
+      btn.disabled = true;
+      btn.textContent = 'Collecting all data...';
+      status.textContent = 'Pulling from all Fantrax API endpoints. This may take 15-30 seconds...';
+      status.style.color = '#94a3b8';
+
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          const body = await resp.text();
+          throw new Error(`API returned ${resp.status}: ${body.slice(0, 300)}`);
+        }
+
+        const blob = await resp.blob();
+        const ext = fmt === 'json' ? 'json' : 'txt';
+        const filename = `fantrax_weekly_bundle.${ext}`;
+
+        // Trigger download
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+
+        status.textContent = `Downloaded ${filename} (${(blob.size / 1024).toFixed(0)} KB). Hand this file to an AI and ask for your weekly recap!`;
+        status.style.color = '#34d399';
+      } catch (e) {
+        status.textContent = `Error: ${e.message}`;
+        status.style.color = '#f87171';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Download Full Bundle';
+      }
     }
 
     // Load standings on page load, others on tab click
