@@ -214,6 +214,9 @@ def collect_full_bundle(
         )
         sections.append("trade_blocks")
 
+        # ── Enrich transactions with player stats and ADP ────────────
+        _enrich_transactions(bundle, translated)
+
         # ── Data quality metadata ───────────────────────────────────
         notes = []
         if raw_scoring and total_players == 0:
@@ -310,3 +313,61 @@ def _safe_call(fn: callable, **kwargs) -> dict | None:
     except Exception as e:
         logger.warning("API call failed: %s", e)
         return None
+
+
+def _enrich_transactions(bundle: dict, translated: dict | None) -> None:
+    """Add player stats and ADP context to each transaction move.
+
+    This lets the AI evaluate whether a pickup/drop was smart without guessing.
+    """
+    tx_data = bundle.get("transactions")
+    if not tx_data or not isinstance(tx_data, dict):
+        return
+    tx_list = tx_data.get("transactions", [])
+    if not tx_list:
+        return
+
+    # Build player name → stats lookup from translated player_stats
+    player_stats_by_name: dict[str, dict] = {}
+    if translated:
+        for team_data in translated.get("player_stats", {}).values():
+            if not isinstance(team_data, dict):
+                continue
+            for p in team_data.get("players", []):
+                name = p.get("player_name", "")
+                if name:
+                    player_stats_by_name[name] = {
+                        "stats": p.get("stats", {}),
+                        "fantasy_points": p.get("fantasy_points", 0),
+                    }
+
+    # Build player name → ADP lookup
+    adp_by_name: dict[str, float] = {}
+    adp_data = bundle.get("adp")
+    if isinstance(adp_data, list):
+        for entry in adp_data:
+            if isinstance(entry, dict) and "name" in entry and "ADP" in entry:
+                adp_by_name[entry["name"]] = entry["ADP"]
+
+    # Enrich each transaction's players
+    for tx in tx_list:
+        for player_move in tx.get("players", []):
+            name = player_move.get("player", "")
+            if not name:
+                continue
+
+            # Add period stats if available
+            ps = player_stats_by_name.get(name)
+            if ps:
+                player_move["player_period_stats"] = ps.get("stats", {})
+                player_move["player_fantasy_points"] = ps.get("fantasy_points", 0)
+
+            # Add ADP — try exact match, then "Last, First" format
+            adp = adp_by_name.get(name)
+            if adp is None:
+                # ADP uses "Last, First" but transactions use "First Last"
+                parts = name.split(" ", 1)
+                if len(parts) == 2:
+                    adp = adp_by_name.get(f"{parts[1]}, {parts[0]}")
+            if adp is not None:
+                player_move["player_adp"] = adp
