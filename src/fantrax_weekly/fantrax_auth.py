@@ -125,7 +125,7 @@ class FantraxAuthAPI:
         data: dict = {
             "newView": "True",
             "period": period or "1",
-            "playerViewType": "1",
+            "playerViewType": "2",
             "sppId": "-1",
             "viewType": "1",
         }

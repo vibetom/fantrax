@@ -230,16 +230,39 @@ def collect_full_bundle(
                                             ),
                                         }
 
+                # Also sample allPlayerStats
+                all_ps = raw_scoring.get("allPlayerStats", {})
+                all_ps_sample = {}
+                for pid, pdata in list(all_ps.items())[:2]:
+                    all_ps_sample[pid] = {
+                        "type": type(pdata).__name__,
+                        "keys": list(pdata.keys())[:10] if isinstance(pdata, dict) else None,
+                        "sample": str(pdata)[:300] if not isinstance(pdata, dict) else None,
+                    }
+
+                ft = raw_scoring.get("fantasyTeams", {})
+                ft_sample = {}
+                for tid, tdata in list(ft.items())[:2]:
+                    ft_sample[tid] = {
+                        "type": type(tdata).__name__,
+                        "len": len(tdata) if isinstance(tdata, (list, dict)) else None,
+                        "sample": str(tdata)[:200] if isinstance(tdata, list) else list(tdata.keys())[:5] if isinstance(tdata, dict) else None,
+                    }
+
                 player_stats_data["_diagnostic"] = {
                     "raw_top_level_keys": list(raw_scoring.keys()),
                     "allTeamsStats_team_count": len(all_teams),
                     "scorerMap_key_count": len(raw_scoring.get("scorerMap", {})),
                     "fantasyTeamInfo_count": len(raw_scoring.get("fantasyTeamInfo", {})),
+                    "allPlayerStats_count": len(all_ps),
+                    "allPlayerStats_sample": all_ps_sample,
+                    "fantasyTeams_count": len(ft),
+                    "fantasyTeams_sample": ft_sample,
                     "tableHeaderGroups": list(raw_scoring.get("tableHeaderTopLevelPerScGroup", {}).keys()),
                     "sample_team_structure": sample_team_data,
                     "note": (
                         "Player stats came back empty after translation. "
-                        "The sample data above shows the actual API response shape."
+                        "allPlayerStats and fantasyTeams data shown above for debugging."
                     ),
                 }
 

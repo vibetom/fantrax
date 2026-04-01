@@ -209,6 +209,27 @@ def translate_live_scoring(raw: dict) -> dict:
     # ── Decode player info from scorerMap ────────────────────────────
     scorer_map = _build_scorer_map(raw)
 
+    # ── Build team ID → roster mapping from fantasyTeams ────────────
+    # fantasyTeams maps team_id → list of scorer IDs on each team
+    team_rosters: dict[str, list[str]] = {}
+    fantasy_teams = raw.get("fantasyTeams", {})
+    if isinstance(fantasy_teams, dict):
+        for tid, roster_data in fantasy_teams.items():
+            if tid.startswith("-"):
+                continue
+            if isinstance(roster_data, list):
+                team_rosters[tid] = roster_data
+            elif isinstance(roster_data, dict):
+                # Could be nested: {"scorerIds": [...]} or similar
+                for v in roster_data.values():
+                    if isinstance(v, list):
+                        team_rosters[tid] = v
+                        break
+
+    # ── Extract individual player stats from allPlayerStats ──────────
+    # allPlayerStats is a flat map: scorer_id → stat data for ALL players
+    all_player_stats_raw = raw.get("allPlayerStats", {})
+
     # ── Decode per-team player stats ─────────────────────────────────
     stats_per_team = raw.get("statsPerTeam", {}).get("allTeamsStats", {})
     for team_id, team_data in stats_per_team.items():
@@ -227,7 +248,6 @@ def translate_live_scoring(raw: dict) -> dict:
                 all_stats_map.update(sm)
             st = status_data.get("seasonTotals", {})
             if st:
-                # Merge — later status groups update but don't overwrite
                 for k, v in st.items():
                     if k not in all_season_totals:
                         all_season_totals[k] = v
@@ -238,11 +258,20 @@ def translate_live_scoring(raw: dict) -> dict:
         if not all_season_totals and "seasonTotals" in team_data:
             all_season_totals = team_data["seasonTotals"]
 
-        team_players = []
-        for scorer_id, stat_data in all_stats_map.items():
-            if scorer_id.startswith("_"):
-                continue
+        # Filter out aggregate keys — only real player IDs
+        player_stats_map = {
+            k: v for k, v in all_stats_map.items() if not k.startswith("_")
+        }
 
+        # If statsPerTeam has no individual players, use allPlayerStats + fantasyTeams
+        if not player_stats_map and all_player_stats_raw and team_id in team_rosters:
+            roster_ids = team_rosters[team_id]
+            for sid in roster_ids:
+                if sid in all_player_stats_raw:
+                    player_stats_map[sid] = all_player_stats_raw[sid]
+
+        team_players = []
+        for scorer_id, stat_data in player_stats_map.items():
             player_info = scorer_map.get(scorer_id, {"name": scorer_id})
             fantasy_points, player_stat_values = _decode_player_stats(stat_data, cat_map)
 
