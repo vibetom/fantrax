@@ -242,12 +242,13 @@ def collect_full_bundle(
 
                 ft = raw_scoring.get("fantasyTeams", {})
                 ft_sample = {}
-                for tid, tdata in list(ft.items())[:2]:
-                    ft_sample[tid] = {
-                        "type": type(tdata).__name__,
-                        "len": len(tdata) if isinstance(tdata, (list, dict)) else None,
-                        "sample": str(tdata)[:200] if isinstance(tdata, list) else list(tdata.keys())[:5] if isinstance(tdata, dict) else None,
-                    }
+                if isinstance(ft, dict):
+                    for tid, tdata in list(ft.items())[:2]:
+                        ft_sample[tid] = {
+                            "type": type(tdata).__name__,
+                            "len": len(tdata) if isinstance(tdata, (list, dict)) else None,
+                            "sample": str(tdata)[:200],
+                        }
 
                 player_stats_data["_diagnostic"] = {
                     "raw_top_level_keys": list(raw_scoring.keys()),

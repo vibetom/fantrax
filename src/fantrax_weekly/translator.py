@@ -215,7 +215,7 @@ def translate_live_scoring(raw: dict) -> dict:
     fantasy_teams = raw.get("fantasyTeams", {})
     if isinstance(fantasy_teams, dict):
         for tid, roster_data in fantasy_teams.items():
-            if tid.startswith("-"):
+            if not isinstance(tid, str) or tid.startswith("-"):
                 continue
             if isinstance(roster_data, list):
                 team_rosters[tid] = roster_data
@@ -225,6 +225,7 @@ def translate_live_scoring(raw: dict) -> dict:
                     if isinstance(v, list):
                         team_rosters[tid] = v
                         break
+            # Skip bools, ints, or other non-collection types
 
     # ── Extract individual player stats from allPlayerStats ──────────
     # allPlayerStats is a flat map: scorer_id → stat data for ALL players
