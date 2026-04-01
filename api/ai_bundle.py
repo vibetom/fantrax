@@ -23,31 +23,22 @@ class handler(BaseHTTPRequestHandler):
 
             user_secret = os.environ.get("FANTRAX_USER_SECRET_ID", "")
             league_id = os.environ.get("FANTRAX_LEAGUE_ID", "")
-            username = os.environ.get("FANTRAX_USERNAME", "")
-            password = os.environ.get("FANTRAX_PASSWORD", "")
+            jsessionid = os.environ.get("FANTRAX_JSESSIONID", "")
 
             # Public API (always available)
             public_api = FantraxAPI(user_secret, league_id)
 
-            # Authenticated API (optional, for rich data)
+            # Authenticated API (requires JSESSIONID cookie from browser)
             auth_api = None
-            auth_status = "skipped — no FANTRAX_USERNAME/FANTRAX_PASSWORD set"
-            if username and password:
-                auth_api = FantraxAuthAPI(league_id, username, password)
-                try:
-                    if auth_api.login():
-                        auth_status = "login successful"
-                    else:
-                        auth_status = "login failed — check username/password"
-                        auth_api = None
-                except Exception as login_err:
-                    auth_status = f"login error: {login_err}"
-                    auth_api = None
+            auth_status = "skipped — no FANTRAX_JSESSIONID set"
+            if jsessionid:
+                auth_api = FantraxAuthAPI(league_id, jsessionid=jsessionid)
+                auth_status = "using JSESSIONID cookie"
 
             try:
                 bundle = collect_full_bundle(public_api, auth_api, period=period)
                 bundle["_meta"]["auth_status"] = auth_status
-                bundle["_meta"]["credentials_provided"] = bool(username and password)
+                bundle["_meta"]["jsessionid_provided"] = bool(jsessionid)
             finally:
                 public_api.close()
                 if auth_api:

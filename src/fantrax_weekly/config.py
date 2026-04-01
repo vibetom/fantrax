@@ -8,8 +8,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     fantrax_user_secret_id: str = ""
     fantrax_league_id: str = ""
-    fantrax_username: str = ""
-    fantrax_password: str = ""
+    fantrax_jsessionid: str = ""
     anthropic_api_key: str = ""
 
     model_config = {"env_file": ".env"}
