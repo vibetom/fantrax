@@ -3,17 +3,26 @@
 The Fantrax internal API returns data with cryptic IDs, nested structures,
 and encoded formats. This module decodes everything into plain English
 so an AI can understand it without any Fantrax-specific knowledge.
+
+NOTE: Fantrax responses often mix dicts, lists, bools, and ints in the
+same parent object. Every .get() or .items() call must guard against
+non-dict values to avoid "'bool' object has no attribute 'items'" crashes.
 """
 
 from __future__ import annotations
 
 
+def _as_dict(val: object) -> dict:
+    """Return val if it's a dict, otherwise empty dict. Prevents crashes on bools/ints."""
+    return val if isinstance(val, dict) else {}
+
+
 def translate_standings(raw: dict) -> dict:
     """Convert raw standings response into readable standings."""
-    if not raw or "tableList" not in raw:
-        return {"error": "No standings data", "raw_keys": list(raw.keys()) if raw else []}
+    if not isinstance(raw, dict) or "tableList" not in raw:
+        return {"error": "No standings data", "raw_keys": list(raw.keys()) if isinstance(raw, dict) else []}
 
-    team_info = raw.get("fantasyTeamInfo", {})
+    team_info = _as_dict(raw.get("fantasyTeamInfo"))
     result = {"teams": [], "period_matchups": {}}
 
     # Parse standings table
@@ -47,9 +56,11 @@ def translate_standings(raw: dict) -> dict:
             result["teams"].append(team_record)
 
     # Parse current matchups
-    matchup_ids = raw.get("matchupIdsPerTeam", {})
+    matchup_ids = _as_dict(raw.get("matchupIdsPerTeam"))
     matchup_pairs = set()
     for tid, matchups in matchup_ids.items():
+        if not isinstance(matchups, list):
+            continue
         for mid in matchups:
             matchup_pairs.add(mid)
 
@@ -200,11 +211,14 @@ def translate_live_scoring(raw: dict) -> dict:
     }
 
     # ── Decode team info ─────────────────────────────────────────────
-    team_info = raw.get("fantasyTeamInfo", {})
+    team_info = _as_dict(raw.get("fantasyTeamInfo"))
     for tid, info in team_info.items():
-        if tid.startswith("-"):
+        if not isinstance(tid, str) or tid.startswith("-"):
             continue
-        result["teams"][tid] = info.get("name", tid)
+        if isinstance(info, dict):
+            result["teams"][tid] = info.get("name", tid)
+        elif isinstance(info, str):
+            result["teams"][tid] = info
 
     # ── Decode player info from scorerMap ────────────────────────────
     scorer_map = _build_scorer_map(raw)
@@ -229,14 +243,16 @@ def translate_live_scoring(raw: dict) -> dict:
 
     # ── Extract individual player stats from allPlayerStats ──────────
     # allPlayerStats is a flat map: scorer_id → stat data for ALL players
-    all_player_stats_raw = raw.get("allPlayerStats", {})
+    all_player_stats_raw = _as_dict(raw.get("allPlayerStats"))
 
     # ── Decode per-team player stats ─────────────────────────────────
-    stats_per_team = raw.get("statsPerTeam", {}).get("allTeamsStats", {})
+    stats_per_team = _as_dict(_as_dict(raw.get("statsPerTeam")).get("allTeamsStats"))
     for team_id, team_data in stats_per_team.items():
-        team_name = result["teams"].get(team_id, team_id)
-        if team_id.startswith("-"):
+        if not isinstance(team_id, str) or team_id.startswith("-"):
             continue
+        if not isinstance(team_data, dict):
+            continue
+        team_name = result["teams"].get(team_id, team_id)
 
         # Collect players from ALL roster status groups, not just ACTIVE
         all_stats_map: dict = {}
@@ -244,20 +260,20 @@ def translate_live_scoring(raw: dict) -> dict:
         for status_key, status_data in team_data.items():
             if not isinstance(status_data, dict):
                 continue
-            sm = status_data.get("statsMap", {})
+            sm = _as_dict(status_data.get("statsMap"))
             if sm:
                 all_stats_map.update(sm)
-            st = status_data.get("seasonTotals", {})
+            st = _as_dict(status_data.get("seasonTotals"))
             if st:
                 for k, v in st.items():
                     if k not in all_season_totals:
                         all_season_totals[k] = v
 
         # Fallback: if team_data itself has statsMap (flat structure)
-        if not all_stats_map and "statsMap" in team_data:
-            all_stats_map = team_data["statsMap"]
-        if not all_season_totals and "seasonTotals" in team_data:
-            all_season_totals = team_data["seasonTotals"]
+        if not all_stats_map:
+            all_stats_map = _as_dict(team_data.get("statsMap"))
+        if not all_season_totals:
+            all_season_totals = _as_dict(team_data.get("seasonTotals"))
 
         # Filter out aggregate keys — only real player IDs
         player_stats_map = {
@@ -317,8 +333,8 @@ def translate_live_scoring(raw: dict) -> dict:
         }
 
     # ── Decode matchups ──────────────────────────────────────────────
-    matchup_map = raw.get("matchupMap", {})
-    matchup_list = raw.get("matchups", [])
+    matchup_map = _as_dict(raw.get("matchupMap"))
+    matchup_list = raw.get("matchups", []) if isinstance(raw.get("matchups"), list) else []
 
     for matchup_id in matchup_list:
         parts = matchup_id.split("_")
