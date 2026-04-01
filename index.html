@@ -9,11 +9,14 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
     h1 { text-align: center; margin-bottom: 8px; font-size: 1.6rem; color: #f8fafc; }
     .subtitle { text-align: center; color: #64748b; margin-bottom: 24px; font-size: 0.9rem; }
-    .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
+    .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
     .tab { padding: 8px 20px; border: 1px solid #334155; border-radius: 6px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.9rem; transition: all 0.15s; }
     .tab:hover { border-color: #60a5fa; color: #e2e8f0; }
     .tab.active { background: #1e40af; border-color: #3b82f6; color: #fff; }
-    .panel { display: none; max-width: 1000px; margin: 0 auto; }
+    .tab.snapshot-tab { border-color: #059669; color: #34d399; }
+    .tab.snapshot-tab:hover { border-color: #10b981; }
+    .tab.snapshot-tab.active { background: #065f46; border-color: #10b981; color: #fff; }
+    .panel { display: none; max-width: 1200px; margin: 0 auto; }
     .panel.active { display: block; }
     .loading { text-align: center; color: #64748b; padding: 40px; }
     .error { text-align: center; color: #f87171; padding: 40px; }
@@ -21,11 +24,19 @@
     th { text-align: left; padding: 10px 12px; background: #1e293b; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; border-bottom: 2px solid #334155; }
     td { padding: 10px 12px; border-bottom: 1px solid #1e293b; }
     tr:hover td { background: #1e293b; }
-    .rank { color: #60a5fa; font-weight: 700; }
-    .team-name { font-weight: 600; color: #f8fafc; }
-    .roster-section { margin-bottom: 24px; }
-    .roster-section h3 { color: #60a5fa; margin-bottom: 8px; font-size: 1rem; padding: 8px 12px; background: #1e293b; border-radius: 6px; }
+    .section { margin-bottom: 24px; }
+    .section h3 { color: #60a5fa; margin-bottom: 8px; font-size: 1rem; padding: 8px 12px; background: #1e293b; border-radius: 6px; }
+    .section-desc { color: #94a3b8; font-size: 0.8rem; padding: 4px 12px 8px; font-style: italic; }
     pre { background: #1e293b; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; color: #cbd5e1; max-height: 600px; overflow-y: auto; }
+    .snapshot-meta { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .snapshot-meta p { color: #94a3b8; font-size: 0.85rem; margin-bottom: 4px; }
+    .snapshot-meta strong { color: #e2e8f0; }
+    .btn { padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: all 0.15s; }
+    .btn-primary { background: #059669; color: #fff; }
+    .btn-primary:hover { background: #10b981; }
+    .btn-primary:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .period-input { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; width: 80px; margin-right: 8px; }
+    .controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 24px; }
   </style>
 </head>
 <body>
@@ -36,13 +47,22 @@
     <button class="tab active" data-tab="standings">Standings</button>
     <button class="tab" data-tab="rosters">Rosters</button>
     <button class="tab" data-tab="league">League Info</button>
+    <button class="tab snapshot-tab" data-tab="snapshot">Weekly Snapshot</button>
     <button class="tab" data-tab="raw">Raw JSON</button>
   </div>
 
   <div id="standings" class="panel active"><div class="loading">Loading standings...</div></div>
-  <div id="rosters" class="panel"><div class="loading">Loading rosters...</div></div>
-  <div id="league" class="panel"><div class="loading">Loading league info...</div></div>
-  <div id="raw" class="panel"><div class="loading">Select a tab first to load data...</div></div>
+  <div id="rosters" class="panel"><div class="loading">Click to load rosters...</div></div>
+  <div id="league" class="panel"><div class="loading">Click to load league info...</div></div>
+  <div id="snapshot" class="panel">
+    <div class="controls">
+      <label style="color:#94a3b8">Period (optional):</label>
+      <input type="number" id="snapshot-period" class="period-input" placeholder="auto" min="1">
+      <button id="snapshot-btn" class="btn btn-primary" onclick="loadSnapshot()">Collect Full Snapshot</button>
+    </div>
+    <div id="snapshot-content"><div class="loading">Click "Collect Full Snapshot" to pull all league data. This calls multiple API endpoints and may take a few seconds.</div></div>
+  </div>
+  <div id="raw" class="panel"><div class="loading">Load data from other tabs first...</div></div>
 
   <script>
     // Tab switching
@@ -60,20 +80,35 @@
     async function fetchData(endpoint) {
       if (cache[endpoint]) return cache[endpoint];
       const resp = await fetch(`/api/${endpoint}`);
-      if (!resp.ok) throw new Error(`API returned ${resp.status}`);
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`API returned ${resp.status}: ${body.slice(0, 200)}`);
+      }
       const data = await resp.json();
       cache[endpoint] = data;
       return data;
     }
 
-    // Render standings
+    // Render a data section with tag and description
+    function renderSection(key, section) {
+      const tag = section._tag || key;
+      const desc = section._description || '';
+      const data = section.data || section;
+      return `
+        <div class="section">
+          <h3>${tag}</h3>
+          ${desc ? `<p class="section-desc">${desc}</p>` : ''}
+          <pre>${JSON.stringify(data, null, 2)}</pre>
+        </div>
+      `;
+    }
+
+    // Standings
     async function loadStandings() {
       const el = document.getElementById('standings');
       try {
         const data = await fetchData('standings');
         updateRaw('standings', data);
-
-        // Try to find the standings array in the response
         const rows = data.standings || data.rows || data.data || [];
         if (Array.isArray(rows) && rows.length > 0) {
           const keys = Object.keys(rows[0]);
@@ -84,7 +119,6 @@
             ).join('')}</tbody>
           </table>`;
         } else {
-          // Fallback: show raw JSON nicely
           el.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
         }
       } catch (e) {
@@ -92,26 +126,24 @@
       }
     }
 
-    // Render rosters
+    // Rosters
     async function loadRosters() {
       const el = document.getElementById('rosters');
       try {
         const data = await fetchData('rosters');
         updateRaw('rosters', data);
-
         const rosters = data.rosters || data.teams || data.data;
         if (rosters && typeof rosters === 'object') {
           if (Array.isArray(rosters)) {
             el.innerHTML = rosters.map(team => `
-              <div class="roster-section">
+              <div class="section">
                 <h3>${team.name || team.teamName || 'Team'}</h3>
                 <pre>${JSON.stringify(team, null, 2)}</pre>
               </div>
             `).join('');
           } else {
-            // Object keyed by team ID
             el.innerHTML = Object.entries(rosters).map(([id, team]) => `
-              <div class="roster-section">
+              <div class="section">
                 <h3>${team.name || team.teamName || id}</h3>
                 <pre>${JSON.stringify(team, null, 2)}</pre>
               </div>
@@ -125,7 +157,7 @@
       }
     }
 
-    // Render league info
+    // League Info
     async function loadLeagueInfo() {
       const el = document.getElementById('league');
       try {
@@ -134,6 +166,55 @@
         el.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
       } catch (e) {
         el.innerHTML = `<div class="error">Failed to load league info: ${e.message}</div>`;
+      }
+    }
+
+    // Weekly Snapshot — pulls ALL data
+    async function loadSnapshot() {
+      const el = document.getElementById('snapshot-content');
+      const btn = document.getElementById('snapshot-btn');
+      const periodInput = document.getElementById('snapshot-period');
+      const period = periodInput.value ? `?period=${periodInput.value}` : '';
+
+      btn.disabled = true;
+      btn.textContent = 'Collecting data...';
+      el.innerHTML = '<div class="loading">Pulling data from all Fantrax endpoints... this may take 10-15 seconds.</div>';
+
+      try {
+        // Don't cache snapshots — always fresh
+        const resp = await fetch(`/api/weekly_snapshot${period}`);
+        if (!resp.ok) {
+          const body = await resp.text();
+          throw new Error(`API returned ${resp.status}: ${body.slice(0, 300)}`);
+        }
+        const data = await resp.json();
+        updateRaw('weekly_snapshot', data);
+
+        let html = '';
+
+        // Meta info
+        if (data._meta) {
+          html += `<div class="snapshot-meta">
+            <p><strong>Collected at:</strong> ${data._meta.collected_at}</p>
+            <p><strong>Period:</strong> ${data._meta.period_requested || 'current'}</p>
+            <p>${data._meta.description}</p>
+          </div>`;
+        }
+
+        // Render each section
+        for (const [key, section] of Object.entries(data)) {
+          if (key === '_meta') continue;
+          if (section && typeof section === 'object') {
+            html += renderSection(key, section);
+          }
+        }
+
+        el.innerHTML = html;
+      } catch (e) {
+        el.innerHTML = `<div class="error">Failed to collect snapshot: ${e.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Collect Full Snapshot';
       }
     }
 
@@ -147,7 +228,7 @@
       ).join('');
     }
 
-    // Load standings immediately, others on tab click
+    // Load standings on page load, others on tab click
     loadStandings();
 
     document.querySelectorAll('.tab').forEach(btn => {
