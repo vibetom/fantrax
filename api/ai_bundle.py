@@ -9,14 +9,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from http.server import BaseHTTPRequestHandler
 
-from fantrax_weekly.collector import bundle_to_text, collect_full_bundle
-from fantrax_weekly.fantrax_api import FantraxAPI
-from fantrax_weekly.fantrax_auth import FantraxAuthAPI
-
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
+            from fantrax_weekly.collector import bundle_to_text, collect_full_bundle
+            from fantrax_weekly.fantrax_api import FantraxAPI
+            from fantrax_weekly.fantrax_auth import FantraxAuthAPI
+
             qs = parse_qs(urlparse(self.path).query)
             period = int(qs["period"][0]) if "period" in qs else None
             fmt = qs.get("format", ["text"])[0]  # "text" or "json"
