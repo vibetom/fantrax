@@ -123,31 +123,23 @@ def collect_full_bundle(
 
     # ── Public API data ──────────────────────────────────────────────
 
-    bundle["league_info"] = _safe_collect(
-        "league_info",
-        "League configuration: team names, matchup schedule, scoring settings.",
-        lambda: public_api.get_league_info(),
+    bundle["league_info"] = _safe_collect_data(
+        "league_info", lambda: public_api.get_league_info()
     )
     sections.append("league_info")
 
-    bundle["rosters"] = _safe_collect(
-        "rosters",
-        "All team rosters: players, positions, lineup slots, injury status.",
-        lambda: public_api.get_team_rosters(period=period),
+    bundle["rosters"] = _safe_collect_data(
+        "rosters", lambda: public_api.get_team_rosters(period=period)
     )
     sections.append("rosters")
 
-    bundle["adp"] = _safe_collect(
-        "adp",
-        "Average Draft Position — compare to actual performance for sleeper/bust analysis.",
-        lambda: public_api.get_adp(sport="MLB"),
+    bundle["adp"] = _safe_collect_data(
+        "adp", lambda: public_api.get_adp(sport="MLB")
     )
     sections.append("adp")
 
-    bundle["draft_results"] = _safe_collect(
-        "draft_results",
-        "This league's draft results: who picked whom and when.",
-        lambda: public_api.get_draft_results(),
+    bundle["draft_results"] = _safe_collect_data(
+        "draft_results", lambda: public_api.get_draft_results()
     )
     sections.append("draft_results")
 
@@ -174,178 +166,77 @@ def collect_full_bundle(
                 len(t.get("players", [])) for t in team_stats.values() if isinstance(t, dict)
             )
 
-            bundle["standings"] = {
-                "_tag": "standings",
-                "_description": (
-                    "Current league standings. 'win/loss/tie' = total CATEGORY "
-                    "wins/losses/ties for the season. 'cpf' = categories won, "
-                    "'cpa' = categories lost."
-                ),
-                "data": translate_standings(
-                    _safe_call(auth_api.get_rich_standings) or {}
-                ),
-            }
+            bundle["standings"] = translate_standings(
+                _safe_call(auth_api.get_rich_standings) or {}
+            )
             sections.append("standings")
 
             player_stats_data = {
                 "period": translated.get("display_period", ""),
                 "date": translated.get("date", ""),
                 "scoring_categories": translated.get("scoring_categories", {}),
-                "stat_legend": translated.get("stat_id_to_name", {}),
+                "stat_key_map": translated.get("stat_key_map", {}),
                 "team_stats": team_stats,
-                "_player_count": total_players,
             }
-            # Include diagnostic info when data is empty or sparse
-            if total_players == 0:
-                # Dump a sample of the raw response structure for debugging
-                sample_team_data = {}
-                all_teams = raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {})
-                for tid, tdata in list(all_teams.items())[:2]:
-                    if isinstance(tdata, dict):
-                        sample_team_data[tid] = {
-                            "keys": list(tdata.keys()),
-                        }
-                        # Show structure of first status group
-                        for sk, sv in list(tdata.items())[:1]:
-                            if isinstance(sv, dict):
-                                sample_team_data[tid][f"sample_{sk}"] = {
-                                    "keys": list(sv.keys())[:10],
-                                    "statsMap_count": len(sv.get("statsMap", {})),
-                                    "statsMap_sample_keys": list(sv.get("statsMap", {}).keys())[:3],
-                                }
-                                # Show one player's stat data shape
-                                for pid, pdata in list(sv.get("statsMap", {}).items())[:1]:
-                                    if not pid.startswith("_"):
-                                        sample_team_data[tid]["sample_player_stat"] = {
-                                            "scorer_id": pid,
-                                            "type": type(pdata).__name__,
-                                            "keys": list(pdata.keys())[:10] if isinstance(pdata, dict) else None,
-                                            "object2_type": type(pdata.get("object2")).__name__ if isinstance(pdata, dict) else None,
-                                            "object2_sample": (
-                                                list(pdata["object2"].items())[:3]
-                                                if isinstance(pdata, dict) and isinstance(pdata.get("object2"), dict)
-                                                else str(pdata.get("object2", ""))[:200]
-                                                if isinstance(pdata, dict)
-                                                else None
-                                            ),
-                                        }
 
-                # Also sample allPlayerStats
-                all_ps = raw_scoring.get("allPlayerStats", {})
-                all_ps_sample = {}
-                for pid, pdata in list(all_ps.items())[:2]:
-                    all_ps_sample[pid] = {
-                        "type": type(pdata).__name__,
-                        "keys": list(pdata.keys())[:10] if isinstance(pdata, dict) else None,
-                        "sample": str(pdata)[:300] if not isinstance(pdata, dict) else None,
-                    }
-
-                ft = raw_scoring.get("fantasyTeams", {})
-                ft_sample = {}
-                if isinstance(ft, dict):
-                    for tid, tdata in list(ft.items())[:2]:
-                        ft_sample[tid] = {
-                            "type": type(tdata).__name__,
-                            "len": len(tdata) if isinstance(tdata, (list, dict)) else None,
-                            "sample": str(tdata)[:200],
-                        }
-
-                player_stats_data["_diagnostic"] = {
-                    "raw_top_level_keys": list(raw_scoring.keys()),
-                    "allTeamsStats_team_count": len(all_teams),
-                    "scorerMap_key_count": len(raw_scoring.get("scorerMap", {})),
-                    "fantasyTeamInfo_count": len(raw_scoring.get("fantasyTeamInfo", {})),
-                    "allPlayerStats_count": len(all_ps),
-                    "allPlayerStats_sample": all_ps_sample,
-                    "fantasyTeams_count": len(ft),
-                    "fantasyTeams_sample": ft_sample,
-                    "tableHeaderGroups": list(raw_scoring.get("tableHeaderTopLevelPerScGroup", {}).keys()),
-                    "sample_team_structure": sample_team_data,
-                    "note": (
-                        "Player stats came back empty after translation. "
-                        "allPlayerStats and fantasyTeams data shown above for debugging."
-                    ),
-                }
-
-            bundle["player_stats"] = {
-                "_tag": "player_stats",
-                "_description": (
-                    "DETAILED PLAYER STATISTICS for this scoring period. Organized by "
-                    "team. Each player has individual stats (HR, RBI, AVG, ERA, K, etc.) "
-                    "and fantasy points. 'category_points' shows each team's category "
-                    "standings for the period and season."
-                ),
-                "data": player_stats_data,
-            }
+            bundle["player_stats"] = player_stats_data
             sections.append("player_stats")
 
             bundle["matchups"] = {
-                "_tag": "matchups",
-                "_description": (
-                    "Head-to-head matchups for this period. Each matchup shows the "
-                    "two teams and category-by-category results. The score is CATEGORIES "
-                    "WON vs LOST (e.g., 5-4-1 = 5 categories won, 4 lost, 1 tied), "
-                    "NOT runs or points."
-                ),
-                "data": {
-                    "period": translated.get("display_period", ""),
-                    "matchups": translated.get("matchups", []),
-                    "teams": translated.get("teams", {}),
-                },
+                "period": translated.get("display_period", ""),
+                "matchups": translated.get("matchups", []),
+                "teams": translated.get("teams", {}),
             }
             sections.append("matchups")
         else:
             bundle["player_stats"] = {
-                "_tag": "player_stats",
                 "error": scoring_error or "API returned empty response",
-                "_note": (
-                    "The live scoring API call failed or returned no data. "
-                    "This is the critical call for player stats. "
-                    "Check that auth cookies are still valid."
-                ),
             }
-            bundle["matchups"] = {"_tag": "matchups", "error": scoring_error or "No data"}
+            bundle["matchups"] = {"error": scoring_error or "No data"}
             sections.append("player_stats")
             sections.append("matchups")
 
         # Transactions
         raw_tx = _safe_call(auth_api.get_transaction_history, max_results=50)
         if raw_tx:
-            bundle["transactions"] = {
-                "_tag": "transactions",
-                "_description": (
-                    "Recent transactions: claims (FA = free agent, WW = waiver wire), "
-                    "drops, and trades. Grouped by transaction with team name and date."
-                ),
-                "data": translate_transactions(raw_tx),
-            }
+            bundle["transactions"] = translate_transactions(raw_tx)
             sections.append("transactions")
 
         # Pending transactions
-        bundle["pending_transactions"] = _safe_collect(
-            "pending_transactions",
-            "Open waiver claims and trade offers in progress.",
-            lambda: auth_api.get_pending_transactions(),
+        bundle["pending_transactions"] = _safe_collect_data(
+            "pending_transactions", lambda: auth_api.get_pending_transactions()
         )
         sections.append("pending_transactions")
 
         # Trade blocks
-        bundle["trade_blocks"] = _safe_collect(
-            "trade_blocks",
-            "Players on the trade block — who's shopping whom.",
-            lambda: auth_api.get_trade_blocks(),
+        bundle["trade_blocks"] = _safe_collect_data(
+            "trade_blocks", lambda: auth_api.get_trade_blocks()
         )
         sections.append("trade_blocks")
+
+        # ── Data quality metadata ───────────────────────────────────
+        notes = []
+        if raw_scoring and total_players == 0:
+            notes.append(
+                "Player stats came back empty after translation — "
+                "check that the scoring period has started."
+            )
+        if scoring_error:
+            notes.append(f"Live scoring API error: {scoring_error}")
+
+        bundle["data_quality"] = {
+            "player_stats_complete": total_players > 0 if raw_scoring else False,
+            "matchup_scores_complete": bool(translated.get("matchups")) if raw_scoring else False,
+            "stat_names_decoded": bool(translated.get("stat_id_to_name")) if raw_scoring else False,
+            "transactions_complete": "transactions" in bundle,
+            "notes": notes,
+        }
 
     else:
         # Fallback to public standings
         raw_pub_standings = _safe_call(public_api.get_standings)
         if raw_pub_standings:
-            bundle["standings"] = {
-                "_tag": "standings",
-                "_description": "League standings from public API (basic).",
-                "data": raw_pub_standings,
-            }
+            bundle["standings"] = raw_pub_standings
             sections.append("standings")
 
         bundle["_auth_note"] = (

@@ -191,7 +191,7 @@ def _decode_player_stats(stat_data: object, cat_map: dict) -> tuple[float, dict]
     - Plain dict of {statId: value} at top level
     """
     fantasy_points = 0.0
-    stats: dict[str, dict] = {}
+    stats: dict = {}
 
     if isinstance(stat_data, dict):
         fantasy_points = stat_data.get("object1", 0) or 0
@@ -204,10 +204,7 @@ def _decode_player_stats(stat_data: object, cat_map: dict) -> tuple[float, dict]
                     scip_id = entry.get("scipId", "")
                     stat_info = cat_map.get(scip_id, {})
                     stat_name = stat_info.get("short", scip_id)
-                    stats[stat_name] = {
-                        "value": entry.get("sv", ""),
-                        "numeric": entry.get("av", 0),
-                    }
+                    stats[stat_name] = entry.get("av", 0)
         elif isinstance(obj2, dict):
             # Format: {"10#0330#-1": 1, "10#0170#-1": 3, ...}
             for stat_id, value in obj2.items():
@@ -216,12 +213,9 @@ def _decode_player_stats(stat_data: object, cat_map: dict) -> tuple[float, dict]
                 stat_info = cat_map.get(stat_id, {})
                 stat_name = stat_info.get("short", stat_id)
                 if isinstance(value, dict):
-                    stats[stat_name] = {
-                        "value": value.get("sv", str(value.get("av", ""))),
-                        "numeric": value.get("av", 0),
-                    }
+                    stats[stat_name] = value.get("av", 0)
                 else:
-                    stats[stat_name] = {"value": str(value), "numeric": value}
+                    stats[stat_name] = value
 
     return fantasy_points, stats
 
@@ -374,6 +368,36 @@ def translate_live_scoring(raw: dict) -> dict:
             "category_points": team_totals,
         }
 
+    # ── Build stat_key_map ─────────────────────────────────────────
+    result["stat_key_map"] = {k: v["short"] for k, v in cat_map.items() if "#" in k}
+
+    # ── Collect per-team category totals for score computation ───
+    # totPtsPerMchup maps team_id → {cat_id: {o1: ..., o2: points, o3: ...}}
+    team_cat_totals: dict[str, dict[str, float]] = {}
+    stats_per_team_raw = _as_dict(_as_dict(raw.get("statsPerTeam")).get("allTeamsStats"))
+    for team_id, team_data in stats_per_team_raw.items():
+        if not isinstance(team_id, str) or team_id.startswith("-"):
+            continue
+        if not isinstance(team_data, dict):
+            continue
+        # Try totPtsPerMchup first, then seasonTotals
+        for status_key, status_data in team_data.items():
+            if not isinstance(status_data, dict):
+                continue
+            tpm = _as_dict(status_data.get("totPtsPerMchup"))
+            if tpm:
+                totals: dict[str, float] = {}
+                for cat_id, vals in tpm.items():
+                    if cat_id.startswith("_"):
+                        continue
+                    if isinstance(vals, dict):
+                        totals[cat_id] = vals.get("o2", 0)
+                    else:
+                        totals[cat_id] = vals
+                if totals:
+                    team_cat_totals[team_id] = totals
+                break
+
     # ── Decode matchups ──────────────────────────────────────────────
     matchup_map = _as_dict(raw.get("matchupMap"))
     matchup_list = raw.get("matchups", []) if isinstance(raw.get("matchups"), list) else []
@@ -396,16 +420,81 @@ def translate_live_scoring(raw: dict) -> dict:
         }
 
         # Parse category-by-category results if available
-        if isinstance(matchup_data, dict):
-            categories = []
+        away_won = 0
+        home_won = 0
+        tied = 0
+        categories = []
+
+        if isinstance(matchup_data, dict) and matchup_data:
             for cat_id, cat_result in matchup_data.items():
                 stat_info = cat_map.get(cat_id, {})
                 stat_name = stat_info.get("short", cat_id)
-                categories.append({
-                    "category": stat_name,
-                    "result": cat_result,
-                })
+                cat_entry = {"category": stat_name}
+
+                # cat_result may be a dict with o1 (away), o2 (home), o3 (result)
+                if isinstance(cat_result, dict):
+                    away_val = cat_result.get("o1", 0)
+                    home_val = cat_result.get("o2", 0)
+                    result_code = cat_result.get("o3", 0)
+                    cat_entry["away_value"] = away_val
+                    cat_entry["home_value"] = home_val
+                    # result_code: 1 = away won, 2 = home won, 0 = tie (common convention)
+                    if result_code == 1:
+                        away_won += 1
+                        cat_entry["winner"] = away_name
+                    elif result_code == 2:
+                        home_won += 1
+                        cat_entry["winner"] = home_name
+                    else:
+                        tied += 1
+                        cat_entry["winner"] = "TIE"
+                else:
+                    cat_entry["result"] = cat_result
+
+                categories.append(cat_entry)
+
             matchup["category_results"] = categories
+            matchup["score"] = f"{away_won}-{home_won}-{tied}"
+            matchup["away_categories_won"] = away_won
+            matchup["home_categories_won"] = home_won
+            matchup["tied_categories"] = tied
+        elif team_cat_totals.get(away_id) and team_cat_totals.get(home_id):
+            # Fallback: compute from per-team category totals
+            away_totals = team_cat_totals[away_id]
+            home_totals = team_cat_totals[home_id]
+            all_cats = set(away_totals.keys()) | set(home_totals.keys())
+            for cat_id in sorted(all_cats):
+                stat_info = cat_map.get(cat_id, {})
+                stat_name = stat_info.get("short", cat_id)
+                a_val = away_totals.get(cat_id, 0)
+                h_val = home_totals.get(cat_id, 0)
+                cat_entry = {
+                    "category": stat_name,
+                    "away_value": a_val,
+                    "home_value": h_val,
+                }
+                if a_val > h_val:
+                    away_won += 1
+                    cat_entry["winner"] = away_name
+                elif h_val > a_val:
+                    home_won += 1
+                    cat_entry["winner"] = home_name
+                else:
+                    tied += 1
+                    cat_entry["winner"] = "TIE"
+                categories.append(cat_entry)
+
+            matchup["category_results"] = categories
+            matchup["score"] = f"{away_won}-{home_won}-{tied}"
+            matchup["away_categories_won"] = away_won
+            matchup["home_categories_won"] = home_won
+            matchup["tied_categories"] = tied
+        else:
+            matchup["category_results"] = []
+            matchup["score"] = None
+            matchup["data_quality_note"] = (
+                "Category-by-category results not available for this matchup"
+            )
 
         result["matchups"].append(matchup)
 
