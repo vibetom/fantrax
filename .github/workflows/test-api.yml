@@ -1,0 +1,45 @@
+name: Test Fantrax API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+    env:
+      FANTRAX_USER_SECRET_ID: ${{ secrets.FANTRAX_USER_SECRET_ID }}
+      FANTRAX_LEAGUE_ID: ${{ secrets.FANTRAX_LEAGUE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Test API connection
+        run: |
+          python -c "
+          from fantrax_weekly.fantrax_api import FantraxAPI
+          from fantrax_weekly.config import get_settings
+
+          s = get_settings()
+          assert s.fantrax_user_secret_id, 'FANTRAX_USER_SECRET_ID secret not set'
+          assert s.fantrax_league_id, 'FANTRAX_LEAGUE_ID secret not set'
+
+          with FantraxAPI(s.fantrax_user_secret_id, s.fantrax_league_id) as api:
+              print('--- Leagues ---')
+              leagues = api.get_leagues()
+              print(leagues)
+
+              print()
+              print('--- Standings ---')
+              standings = api.get_standings()
+              print(standings)
+
+              print()
+              print('--- Rosters ---')
+              rosters = api.get_team_rosters()
+              print(str(rosters)[:2000])
+
+              print()
+              print('API connection successful!')
+          "
