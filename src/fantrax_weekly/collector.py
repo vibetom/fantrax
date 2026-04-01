@@ -155,23 +155,24 @@ def collect_full_bundle(
 
     if auth_api and auth_api.is_logged_in:
         # Player stats — THE most important section
-        raw_scoring = _safe_call(auth_api.get_live_scoring, period=str(period) if period else None)
+        # Try fetching live scoring; capture errors visibly instead of swallowing
+        raw_scoring = None
+        scoring_error = None
+        try:
+            raw_scoring = auth_api.get_live_scoring(
+                period=str(period) if period else None,
+            )
+        except Exception as e:
+            scoring_error = str(e)
+            logger.warning("get_live_scoring failed: %s", e)
+
         if raw_scoring:
             translated = translate_live_scoring(raw_scoring)
 
-            # Diagnostic: check if translation produced actual player data
             team_stats = translated.get("player_stats", {})
             total_players = sum(
                 len(t.get("players", [])) for t in team_stats.values() if isinstance(t, dict)
             )
-            if total_players == 0:
-                logger.warning(
-                    "Translation produced 0 players. Raw response keys: %s, "
-                    "statsPerTeam keys: %s, scorerMap keys: %s",
-                    list(raw_scoring.keys())[:20],
-                    list(raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {}).keys())[:10],
-                    list(raw_scoring.get("scorerMap", {}).keys())[:10],
-                )
 
             bundle["standings"] = {
                 "_tag": "standings",
@@ -192,27 +193,53 @@ def collect_full_bundle(
                 "scoring_categories": translated.get("scoring_categories", {}),
                 "stat_legend": translated.get("stat_id_to_name", {}),
                 "team_stats": team_stats,
+                "_player_count": total_players,
             }
-            # If translation produced no players, include raw response keys
-            # so we can diagnose the response shape
+            # Include diagnostic info when data is empty or sparse
             if total_players == 0:
+                # Dump a sample of the raw response structure for debugging
+                sample_team_data = {}
+                all_teams = raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {})
+                for tid, tdata in list(all_teams.items())[:2]:
+                    if isinstance(tdata, dict):
+                        sample_team_data[tid] = {
+                            "keys": list(tdata.keys()),
+                        }
+                        # Show structure of first status group
+                        for sk, sv in list(tdata.items())[:1]:
+                            if isinstance(sv, dict):
+                                sample_team_data[tid][f"sample_{sk}"] = {
+                                    "keys": list(sv.keys())[:10],
+                                    "statsMap_count": len(sv.get("statsMap", {})),
+                                    "statsMap_sample_keys": list(sv.get("statsMap", {}).keys())[:3],
+                                }
+                                # Show one player's stat data shape
+                                for pid, pdata in list(sv.get("statsMap", {}).items())[:1]:
+                                    if not pid.startswith("_"):
+                                        sample_team_data[tid]["sample_player_stat"] = {
+                                            "scorer_id": pid,
+                                            "type": type(pdata).__name__,
+                                            "keys": list(pdata.keys())[:10] if isinstance(pdata, dict) else None,
+                                            "object2_type": type(pdata.get("object2")).__name__ if isinstance(pdata, dict) else None,
+                                            "object2_sample": (
+                                                list(pdata["object2"].items())[:3]
+                                                if isinstance(pdata, dict) and isinstance(pdata.get("object2"), dict)
+                                                else str(pdata.get("object2", ""))[:200]
+                                                if isinstance(pdata, dict)
+                                                else None
+                                            ),
+                                        }
+
                 player_stats_data["_diagnostic"] = {
                     "raw_top_level_keys": list(raw_scoring.keys()),
-                    "has_statsPerTeam": "statsPerTeam" in raw_scoring,
-                    "statsPerTeam_keys": list(
-                        raw_scoring.get("statsPerTeam", {}).keys()
-                    ),
-                    "allTeamsStats_team_count": len(
-                        raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {})
-                    ),
-                    "scorerMap_count": len(raw_scoring.get("scorerMap", {})),
-                    "fantasyTeamInfo_count": len(
-                        raw_scoring.get("fantasyTeamInfo", {})
-                    ),
+                    "allTeamsStats_team_count": len(all_teams),
+                    "scorerMap_key_count": len(raw_scoring.get("scorerMap", {})),
+                    "fantasyTeamInfo_count": len(raw_scoring.get("fantasyTeamInfo", {})),
+                    "tableHeaderGroups": list(raw_scoring.get("tableHeaderTopLevelPerScGroup", {}).keys()),
+                    "sample_team_structure": sample_team_data,
                     "note": (
                         "Player stats came back empty after translation. "
-                        "The raw API response keys above can help diagnose "
-                        "whether the Fantrax API returned data in an unexpected format."
+                        "The sample data above shows the actual API response shape."
                     ),
                 }
 
@@ -244,8 +271,18 @@ def collect_full_bundle(
             }
             sections.append("matchups")
         else:
-            bundle["player_stats"] = {"_tag": "player_stats", "error": "Failed to fetch"}
-            bundle["matchups"] = {"_tag": "matchups", "error": "Failed to fetch"}
+            bundle["player_stats"] = {
+                "_tag": "player_stats",
+                "error": scoring_error or "API returned empty response",
+                "_note": (
+                    "The live scoring API call failed or returned no data. "
+                    "This is the critical call for player stats. "
+                    "Check that auth cookies are still valid."
+                ),
+            }
+            bundle["matchups"] = {"_tag": "matchups", "error": scoring_error or "No data"}
+            sections.append("player_stats")
+            sections.append("matchups")
 
         # Transactions
         raw_tx = _safe_call(auth_api.get_transaction_history, max_results=50)

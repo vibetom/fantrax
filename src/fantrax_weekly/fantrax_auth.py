@@ -117,15 +117,10 @@ class FantraxAuthAPI:
         self,
         period: str | None = None,
         scoring_date: str | None = None,
-        status_or_pos: str | None = None,
-        max_results: int = 100,
-        page: int = 1,
     ) -> dict:
         """Get detailed player stats and scoring.
 
-        Core parameters match the known-working FantraxAPI library.
-        Additional params (maxResultsPerPage, statusOrPos) are needed
-        to ensure the response includes actual player rows with stats.
+        Parameters match the known-working FantraxAPI library exactly.
         """
         data: dict = {
             "newView": "True",
@@ -133,15 +128,7 @@ class FantraxAuthAPI:
             "playerViewType": "1",
             "sppId": "-1",
             "viewType": "1",
-            "maxResultsPerPage": str(max_results),
-            "pageNumber": str(page),
-            "scoringCategoryType": "5",
-            "timeframeTypeCode": "BY_PERIOD",
-            "miscDisplayType": "1",
-            "adminMode": "False",
         }
-        if status_or_pos:
-            data["statusOrPos"] = status_or_pos
         if scoring_date:
             data["date"] = scoring_date
         return self._call("getLiveScoringStats", data)
