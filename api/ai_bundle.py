@@ -31,13 +31,23 @@ class handler(BaseHTTPRequestHandler):
 
             # Authenticated API (optional, for rich data)
             auth_api = None
+            auth_status = "skipped — no FANTRAX_USERNAME/FANTRAX_PASSWORD set"
             if username and password:
                 auth_api = FantraxAuthAPI(league_id, username, password)
-                if not auth_api.login():
+                try:
+                    if auth_api.login():
+                        auth_status = "login successful"
+                    else:
+                        auth_status = "login failed — check username/password"
+                        auth_api = None
+                except Exception as login_err:
+                    auth_status = f"login error: {login_err}"
                     auth_api = None
 
             try:
                 bundle = collect_full_bundle(public_api, auth_api, period=period)
+                bundle["_meta"]["auth_status"] = auth_status
+                bundle["_meta"]["credentials_provided"] = bool(username and password)
             finally:
                 public_api.close()
                 if auth_api:

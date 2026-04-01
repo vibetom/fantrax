@@ -269,10 +269,22 @@ def bundle_to_text(bundle: dict) -> str:
         f"Authenticated data: {'YES' if meta.get('has_authenticated_data') else 'NO (limited data)'}"
     )
     lines.append(f"Sections included: {', '.join(meta.get('sections', []))}")
+    lines.append(f"Auth status: {meta.get('auth_status', 'unknown')}")
+    lines.append(f"Credentials provided: {meta.get('credentials_provided', False)}")
     lines.append("")
 
     if bundle.get("_auth_note"):
         lines.append(f"WARNING: {bundle['_auth_note']}")
+        lines.append("")
+
+    # Surface any section-level errors prominently
+    errors = []
+    for key, value in bundle.items():
+        if isinstance(value, dict) and "error" in value:
+            errors.append(f"  - {value.get('_tag', key)}: {value['error']}")
+    if errors:
+        lines.append("ERRORS ENCOUNTERED:")
+        lines.extend(errors)
         lines.append("")
 
     for key, value in bundle.items():
