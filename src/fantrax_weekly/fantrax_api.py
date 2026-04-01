@@ -53,6 +53,7 @@ class FantraxAPI:
         start: int | None = None,
         limit: int | None = None,
         order: str | None = None,
+        show_all_positions: bool = False,
     ) -> dict:
         """Retrieve Average Draft Pick info."""
         body: dict = {"sport": sport}
@@ -64,6 +65,8 @@ class FantraxAPI:
             body["limit"] = limit
         if order:
             body["order"] = order
+        if show_all_positions:
+            body["showAllPositions"] = "true"
         return self._post("/getAdp", body)
 
     # ── League-specific endpoints ────────────────────────────────────
