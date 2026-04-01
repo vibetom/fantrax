@@ -174,10 +174,16 @@ def collect_full_bundle(
             player_stats_data = {
                 "period": translated.get("display_period", ""),
                 "date": translated.get("date", ""),
+                "scoring_period": _extract_scoring_period(raw_scoring),
                 "scoring_categories": translated.get("scoring_categories", {}),
                 "stat_key_map": translated.get("stat_key_map", {}),
                 "team_stats": team_stats,
             }
+
+            # Flag teams with incomplete player data
+            for tname, tdata in team_stats.items():
+                if isinstance(tdata, dict) and not tdata.get("players"):
+                    tdata["data_quality_note"] = "Incomplete player stats for this team"
 
             bundle["player_stats"] = player_stats_data
             sections.append("player_stats")
@@ -227,11 +233,25 @@ def collect_full_bundle(
         if scoring_error:
             notes.append(f"Live scoring API error: {scoring_error}")
 
+        matchups_list = translated.get("matchups", []) if raw_scoring else []
+        scores_complete = all(
+            m.get("score") is not None for m in matchups_list
+        ) if matchups_list else False
+        cats_complete = all(
+            m.get("category_results") for m in matchups_list
+        ) if matchups_list else False
+        tx_enriched = any(
+            any("player_period_stats" in p for p in tx.get("players", []))
+            for tx in (bundle.get("transactions", {}).get("transactions", []))
+        ) if isinstance(bundle.get("transactions"), dict) else False
+
         bundle["data_quality"] = {
             "player_stats_complete": total_players > 0 if raw_scoring else False,
-            "matchup_scores_complete": bool(translated.get("matchups")) if raw_scoring else False,
+            "matchup_scores_complete": scores_complete,
+            "category_results_complete": cats_complete,
             "stat_names_decoded": bool(translated.get("stat_id_to_name")) if raw_scoring else False,
             "transactions_complete": "transactions" in bundle,
+            "transactions_enriched": tx_enriched,
             "notes": notes,
         }
 
@@ -295,6 +315,17 @@ def bundle_to_text(bundle: dict) -> str:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _extract_scoring_period(raw: dict) -> dict:
+    """Extract scoring period start/end dates from raw scoring response."""
+    dates = raw.get("dates", []) if isinstance(raw.get("dates"), list) else []
+    display = raw.get("displayPeriod", "")
+    if dates and len(dates) >= 2:
+        return {"start": dates[0], "end": dates[-1], "display": display}
+    if dates and len(dates) == 1:
+        return {"start": dates[0], "end": dates[0], "display": display}
+    return {"start": None, "end": None, "display": display}
 
 
 def _safe_collect_data(tag: str, fn: callable) -> dict | None:
