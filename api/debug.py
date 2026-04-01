@@ -1,4 +1,4 @@
-"""Debug endpoint to test authenticated API calls and see raw responses."""
+"""Debug endpoint — lazy imports so Vercel doesn't crash at load time."""
 
 import json
 import os
@@ -8,76 +8,87 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from http.server import BaseHTTPRequestHandler
 
-from fantrax_weekly.fantrax_auth import FantraxAuthAPI
-
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        report = {"steps": []}
+
         try:
             league_id = os.environ.get("FANTRAX_LEAGUE_ID", "")
             username = os.environ.get("FANTRAX_USERNAME", "")
             password = os.environ.get("FANTRAX_PASSWORD", "")
 
-            report = {
-                "credentials_present": {
-                    "league_id": bool(league_id),
-                    "username": bool(username),
-                    "password": bool(password),
-                },
-                "login_result": None,
-                "cookies_after_login": [],
-                "test_calls": {},
+            report["credentials_present"] = {
+                "league_id": bool(league_id),
+                "username": bool(username),
+                "password": bool(password),
             }
 
-            api = FantraxAuthAPI(league_id, username, password)
+            if not (username and password and league_id):
+                report["error"] = "Missing one or more credentials in env vars"
+                return self._send(200, report)
+
+            # Lazy import to catch import errors
+            report["steps"].append("importing fantrax_auth")
             try:
+                from fantrax_weekly.fantrax_auth import FantraxAuthAPI
+            except Exception as e:
+                report["import_error"] = f"{type(e).__name__}: {e}"
+                return self._send(200, report)
+
+            report["steps"].append("creating client")
+            api = FantraxAuthAPI(league_id, username, password)
+
+            try:
+                report["steps"].append("logging in")
                 login_ok = api.login()
                 report["login_result"] = login_ok
-                report["cookies_after_login"] = [
+                report["cookies"] = [
                     {"name": c.name, "domain": c.domain}
                     for c in api._client.cookies.jar
                 ]
 
                 if login_ok:
-                    # Test getLiveScoringStats with correct params
-                    report["test_calls"]["getLiveScoringStats"] = api.debug_call(
-                        "getLiveScoringStats",
-                        {
-                            "newView": "True",
-                            "period": "1",
-                            "playerViewType": "1",
-                            "sppId": "-1",
-                            "viewType": "1",
-                        },
-                    )
+                    report["steps"].append("calling getLiveScoringStats")
+                    try:
+                        result = api.get_live_scoring(period="1")
+                        s = json.dumps(result, default=str)
+                        report["live_scoring"] = {
+                            "ok": True,
+                            "keys": list(result.keys()) if isinstance(result, dict) else str(type(result)),
+                            "size_bytes": len(s),
+                            "preview": s[:3000],
+                        }
+                    except Exception as e:
+                        report["live_scoring"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-                    # Test getTransactionDetailsHistory
-                    report["test_calls"]["getTransactionDetailsHistory"] = api.debug_call(
-                        "getTransactionDetailsHistory",
-                        {"maxResultsPerPage": "20"},
-                    )
+                    report["steps"].append("calling getTransactionDetailsHistory")
+                    try:
+                        result = api.get_transaction_history(max_results=5)
+                        s = json.dumps(result, default=str)
+                        report["transactions"] = {
+                            "ok": True,
+                            "keys": list(result.keys()) if isinstance(result, dict) else str(type(result)),
+                            "size_bytes": len(s),
+                            "preview": s[:3000],
+                        }
+                    except Exception as e:
+                        report["transactions"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-                    # Test getStandings
-                    report["test_calls"]["getStandings"] = api.debug_call(
-                        "getStandings",
-                        {"view": "STANDINGS"},
-                    )
+                report["steps"].append("done")
             finally:
                 api.close()
 
-            # Truncate large responses for readability
-            output = json.dumps(report, indent=2, default=str)
-            if len(output) > 500000:
-                output = output[:500000] + "\n... (truncated)"
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(output.encode())
+            self._send(200, report)
 
         except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e), "type": type(e).__name__}).encode())
+            report["fatal_error"] = f"{type(e).__name__}: {e}"
+            self._send(500, report)
+
+    def _send(self, status, data):
+        body = json.dumps(data, indent=2, default=str).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
