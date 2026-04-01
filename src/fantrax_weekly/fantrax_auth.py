@@ -85,6 +85,8 @@ class FantraxAuthAPI:
                 if v is not None:
                     msg_data[k] = str(v)
 
+        logger.debug("Calling %s with keys: %s", method, list(msg_data.keys()))
+
         resp = self._client.post(
             f"{FXPA_URL}?leagueId={self.league_id}",
             json={"msgs": [{"method": method, "data": msg_data}]},
@@ -94,10 +96,20 @@ class FantraxAuthAPI:
 
         responses = result.get("responses", [])
         if not responses:
+            logger.warning("%s returned no responses", method)
             return {}
         if responses[0].get("error"):
             raise RuntimeError(f"Fantrax API error in {method}: {responses[0]['error']}")
-        return responses[0].get("data", {})
+
+        response_data = responses[0].get("data", {})
+        if isinstance(response_data, dict):
+            logger.info(
+                "%s response: %d top-level keys: %s",
+                method,
+                len(response_data),
+                list(response_data.keys())[:20],
+            )
+        return response_data
 
     # ── Player Stats & Scoring ───────────────────────────────────────
 
@@ -105,10 +117,15 @@ class FantraxAuthAPI:
         self,
         period: str | None = None,
         scoring_date: str | None = None,
+        status_or_pos: str | None = None,
+        max_results: int = 100,
+        page: int = 1,
     ) -> dict:
         """Get detailed player stats and scoring.
 
-        Parameters match the known-working FantraxAPI library exactly.
+        Core parameters match the known-working FantraxAPI library.
+        Additional params (maxResultsPerPage, statusOrPos) are needed
+        to ensure the response includes actual player rows with stats.
         """
         data: dict = {
             "newView": "True",
@@ -116,7 +133,15 @@ class FantraxAuthAPI:
             "playerViewType": "1",
             "sppId": "-1",
             "viewType": "1",
+            "maxResultsPerPage": str(max_results),
+            "pageNumber": str(page),
+            "scoringCategoryType": "5",
+            "timeframeTypeCode": "BY_PERIOD",
+            "miscDisplayType": "1",
+            "adminMode": "False",
         }
+        if status_or_pos:
+            data["statusOrPos"] = status_or_pos
         if scoring_date:
             data["date"] = scoring_date
         return self._call("getLiveScoringStats", data)
@@ -156,14 +181,7 @@ class FantraxAuthAPI:
 
     def get_matchup_scoring(self, period: str | None = None) -> dict:
         """Get matchup-level scoring breakdown."""
-        data: dict = {
-            "newView": "True",
-            "period": period or "1",
-            "playerViewType": "1",
-            "sppId": "-1",
-            "viewType": "1",
-        }
-        return self._call("getLiveScoringStats", data)
+        return self.get_live_scoring(period=period)
 
     def get_rich_standings(self) -> dict:
         """Get detailed standings with more data than the public API."""

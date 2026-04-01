@@ -158,6 +158,21 @@ def collect_full_bundle(
         raw_scoring = _safe_call(auth_api.get_live_scoring, period=str(period) if period else None)
         if raw_scoring:
             translated = translate_live_scoring(raw_scoring)
+
+            # Diagnostic: check if translation produced actual player data
+            team_stats = translated.get("player_stats", {})
+            total_players = sum(
+                len(t.get("players", [])) for t in team_stats.values() if isinstance(t, dict)
+            )
+            if total_players == 0:
+                logger.warning(
+                    "Translation produced 0 players. Raw response keys: %s, "
+                    "statsPerTeam keys: %s, scorerMap keys: %s",
+                    list(raw_scoring.keys())[:20],
+                    list(raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {}).keys())[:10],
+                    list(raw_scoring.get("scorerMap", {}).keys())[:10],
+                )
+
             bundle["standings"] = {
                 "_tag": "standings",
                 "_description": (
@@ -171,6 +186,36 @@ def collect_full_bundle(
             }
             sections.append("standings")
 
+            player_stats_data = {
+                "period": translated.get("display_period", ""),
+                "date": translated.get("date", ""),
+                "scoring_categories": translated.get("scoring_categories", {}),
+                "stat_legend": translated.get("stat_id_to_name", {}),
+                "team_stats": team_stats,
+            }
+            # If translation produced no players, include raw response keys
+            # so we can diagnose the response shape
+            if total_players == 0:
+                player_stats_data["_diagnostic"] = {
+                    "raw_top_level_keys": list(raw_scoring.keys()),
+                    "has_statsPerTeam": "statsPerTeam" in raw_scoring,
+                    "statsPerTeam_keys": list(
+                        raw_scoring.get("statsPerTeam", {}).keys()
+                    ),
+                    "allTeamsStats_team_count": len(
+                        raw_scoring.get("statsPerTeam", {}).get("allTeamsStats", {})
+                    ),
+                    "scorerMap_count": len(raw_scoring.get("scorerMap", {})),
+                    "fantasyTeamInfo_count": len(
+                        raw_scoring.get("fantasyTeamInfo", {})
+                    ),
+                    "note": (
+                        "Player stats came back empty after translation. "
+                        "The raw API response keys above can help diagnose "
+                        "whether the Fantrax API returned data in an unexpected format."
+                    ),
+                }
+
             bundle["player_stats"] = {
                 "_tag": "player_stats",
                 "_description": (
@@ -179,13 +224,7 @@ def collect_full_bundle(
                     "and fantasy points. 'category_points' shows each team's category "
                     "standings for the period and season."
                 ),
-                "data": {
-                    "period": translated.get("display_period", ""),
-                    "date": translated.get("date", ""),
-                    "scoring_categories": translated.get("scoring_categories", {}),
-                    "stat_legend": translated.get("stat_id_to_name", {}),
-                    "team_stats": translated.get("player_stats", {}),
-                },
+                "data": player_stats_data,
             }
             sections.append("player_stats")
 
