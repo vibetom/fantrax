@@ -63,6 +63,116 @@ def translate_standings(raw: dict) -> dict:
     return result
 
 
+def _build_cat_map(raw: dict) -> dict[str, dict[str, str]]:
+    """Build a mapping from ALL forms of category ID to human-readable stat name.
+
+    Fantrax uses several ID formats:
+      - Simple scipId: "0330"
+      - Compound key: "10#0330#-1" (group#scipId#variant)
+    We index by all forms so lookups always succeed.
+    """
+    cat_map: dict[str, dict[str, str]] = {}
+
+    for group_id, group_headers in raw.get("tableHeaderTopLevelPerScGroup", {}).items():
+        if not isinstance(group_headers, list):
+            continue
+        for header in group_headers:
+            scip_id = header.get("scipId", "")
+            short_name = header.get("shortName", "")
+            full_name = header.get("name", short_name)
+            if not scip_id:
+                continue
+
+            info = {"short": short_name, "name": full_name}
+            # Index by simple scipId
+            cat_map[scip_id] = info
+            # Index by compound key forms: "group#scipId#-1", "group#scipId#0", etc.
+            for variant in ("-1", "0", "1"):
+                cat_map[f"{group_id}#{scip_id}#{variant}"] = info
+
+    # Also try tableHeaders if present (alternate response shape)
+    for header in raw.get("tableHeaders", []):
+        scip_id = header.get("scipId", "")
+        short_name = header.get("shortName", "")
+        if scip_id and scip_id not in cat_map:
+            cat_map[scip_id] = {"short": short_name, "name": header.get("name", short_name)}
+
+    return cat_map
+
+
+def _build_scorer_map(raw: dict) -> dict[str, dict]:
+    """Extract player info from scorerMap, handling variable nesting depth."""
+    scorer_map = {}
+
+    def _extract_scorer(obj: object) -> None:
+        """Recursively walk the scorerMap to find scorer entries."""
+        if isinstance(obj, dict):
+            # If this dict has a "scorer" key, it's a player entry
+            if "scorer" in obj and isinstance(obj["scorer"], dict):
+                scorer = obj["scorer"]
+                sid = scorer.get("scorerId", "")
+                if sid:
+                    scorer_map[sid] = {
+                        "name": scorer.get("name", ""),
+                        "short_name": scorer.get("shortName", ""),
+                        "team": scorer.get("teamShortName", ""),
+                        "positions": scorer.get("posShortNames", ""),
+                    }
+            else:
+                for v in obj.values():
+                    _extract_scorer(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _extract_scorer(item)
+
+    _extract_scorer(raw.get("scorerMap", {}))
+    return scorer_map
+
+
+def _decode_player_stats(stat_data: object, cat_map: dict) -> tuple[float, dict]:
+    """Extract fantasy points and stat values from a player's stat data.
+
+    Handles multiple response formats:
+    - object1/object2 with list of {scipId, sv, av} dicts
+    - object1/object2 with a plain dict of {statId: value}
+    - Plain dict of {statId: value} at top level
+    """
+    fantasy_points = 0.0
+    stats: dict[str, dict] = {}
+
+    if isinstance(stat_data, dict):
+        fantasy_points = stat_data.get("object1", 0) or 0
+        obj2 = stat_data.get("object2", stat_data)
+
+        if isinstance(obj2, list):
+            # Format: [{scipId: "xxx", sv: "1", av: 1}, ...]
+            for entry in obj2:
+                if isinstance(entry, dict):
+                    scip_id = entry.get("scipId", "")
+                    stat_info = cat_map.get(scip_id, {})
+                    stat_name = stat_info.get("short", scip_id)
+                    stats[stat_name] = {
+                        "value": entry.get("sv", ""),
+                        "numeric": entry.get("av", 0),
+                    }
+        elif isinstance(obj2, dict):
+            # Format: {"10#0330#-1": 1, "10#0170#-1": 3, ...}
+            for stat_id, value in obj2.items():
+                if stat_id in ("object1", "object2"):
+                    continue
+                stat_info = cat_map.get(stat_id, {})
+                stat_name = stat_info.get("short", stat_id)
+                if isinstance(value, dict):
+                    stats[stat_name] = {
+                        "value": value.get("sv", str(value.get("av", ""))),
+                        "numeric": value.get("av", 0),
+                    }
+                else:
+                    stats[stat_name] = {"value": str(value), "numeric": value}
+
+    return fantasy_points, stats
+
+
 def translate_live_scoring(raw: dict) -> dict:
     """Convert raw live scoring response into readable player stats and matchups."""
     if not raw:
@@ -79,24 +189,15 @@ def translate_live_scoring(raw: dict) -> dict:
     }
 
     # ── Decode scoring categories ────────────────────────────────────
-    # Build a mapping from scipId to human-readable stat name
-    cat_map = {}
     for group in raw.get("scoringCategoryGroups", []):
         group_id = group.get("id", "")
         group_name = group.get("name", "")
         result["scoring_categories"][group_id] = group_name
 
-    # The table headers contain the actual stat names mapped to category IDs
-    for group_headers in raw.get("tableHeaderTopLevelPerScGroup", {}).values():
-        if isinstance(group_headers, list):
-            for header in group_headers:
-                scip_id = header.get("scipId", "")
-                short_name = header.get("shortName", "")
-                full_name = header.get("name", short_name)
-                if scip_id:
-                    cat_map[scip_id] = {"short": short_name, "name": full_name}
-
-    result["stat_id_to_name"] = cat_map
+    cat_map = _build_cat_map(raw)
+    result["stat_id_to_name"] = {
+        k: v for k, v in cat_map.items() if "#" not in k  # Only show simple IDs in legend
+    }
 
     # ── Decode team info ─────────────────────────────────────────────
     team_info = raw.get("fantasyTeamInfo", {})
@@ -106,23 +207,7 @@ def translate_live_scoring(raw: dict) -> dict:
         result["teams"][tid] = info.get("name", tid)
 
     # ── Decode player info from scorerMap ────────────────────────────
-    scorer_map = {}
-    for _, level1 in raw.get("scorerMap", {}).items():
-        if isinstance(level1, dict):
-            for _, level2 in level1.items():
-                if isinstance(level2, dict):
-                    for _, level3 in level2.items():
-                        if isinstance(level3, list):
-                            for entry in level3:
-                                scorer = entry.get("scorer", {})
-                                sid = scorer.get("scorerId", "")
-                                if sid:
-                                    scorer_map[sid] = {
-                                        "name": scorer.get("name", ""),
-                                        "short_name": scorer.get("shortName", ""),
-                                        "team": scorer.get("teamShortName", ""),
-                                        "positions": scorer.get("posShortNames", ""),
-                                    }
+    scorer_map = _build_scorer_map(raw)
 
     # ── Decode per-team player stats ─────────────────────────────────
     stats_per_team = raw.get("statsPerTeam", {}).get("allTeamsStats", {})
@@ -131,49 +216,58 @@ def translate_live_scoring(raw: dict) -> dict:
         if team_id.startswith("-"):
             continue
 
-        active = team_data.get("ACTIVE", {})
-        stats_map = active.get("statsMap", {})
-        season_totals = active.get("seasonTotals", {})
+        # Collect players from ALL roster status groups, not just ACTIVE
+        all_stats_map: dict = {}
+        all_season_totals: dict = {}
+        for status_key, status_data in team_data.items():
+            if not isinstance(status_data, dict):
+                continue
+            sm = status_data.get("statsMap", {})
+            if sm:
+                all_stats_map.update(sm)
+            st = status_data.get("seasonTotals", {})
+            if st:
+                # Merge — later status groups update but don't overwrite
+                for k, v in st.items():
+                    if k not in all_season_totals:
+                        all_season_totals[k] = v
+
+        # Fallback: if team_data itself has statsMap (flat structure)
+        if not all_stats_map and "statsMap" in team_data:
+            all_stats_map = team_data["statsMap"]
+        if not all_season_totals and "seasonTotals" in team_data:
+            all_season_totals = team_data["seasonTotals"]
 
         team_players = []
-        for scorer_id, stat_data in stats_map.items():
+        for scorer_id, stat_data in all_stats_map.items():
             if scorer_id.startswith("_"):
                 continue
 
             player_info = scorer_map.get(scorer_id, {"name": scorer_id})
-            stat_entries = stat_data.get("object2", [])
-            fantasy_points = stat_data.get("object1", 0)
+            fantasy_points, player_stat_values = _decode_player_stats(stat_data, cat_map)
 
-            player_stats = {
+            team_players.append({
                 "player_name": player_info.get("name", scorer_id),
                 "mlb_team": player_info.get("team", ""),
                 "positions": player_info.get("positions", ""),
                 "fantasy_points": fantasy_points,
-                "stats": {},
-            }
-
-            for entry in stat_entries:
-                scip_id = entry.get("scipId", "")
-                stat_info = cat_map.get(scip_id, {})
-                stat_name = stat_info.get("short", scip_id)
-                player_stats["stats"][stat_name] = {
-                    "value": entry.get("sv", ""),
-                    "numeric": entry.get("av", 0),
-                }
-
-            team_players.append(player_stats)
+                "stats": player_stat_values,
+            })
 
         # Team totals
         team_totals = {}
-        for cat_id, totals in season_totals.items():
+        for cat_id, totals in all_season_totals.items():
+            if not isinstance(totals, dict):
+                continue
             if cat_id.startswith("_"):
-                label = "Total" if cat_id == "_ALL" else cat_id
                 if cat_id == "_ALL":
                     label = "All Categories Total"
                 elif cat_id == "_10":
                     label = "Hitting Total"
                 elif cat_id == "_20":
                     label = "Pitching Total"
+                else:
+                    label = cat_id
                 team_totals[label] = {
                     "period_points": totals.get("o2", 0),
                     "season_points": totals.get("o3", 0),
