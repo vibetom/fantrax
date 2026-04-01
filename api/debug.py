@@ -1,4 +1,4 @@
-"""Debug endpoint — tests authenticated API with JSESSIONID cookie."""
+"""Debug endpoint — tests authenticated API with browser cookies."""
 
 import json
 import os
@@ -15,16 +15,25 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             league_id = os.environ.get("FANTRAX_LEAGUE_ID", "")
+            fx_rm = os.environ.get("FANTRAX_FX_RM", "")
             jsessionid = os.environ.get("FANTRAX_JSESSIONID", "")
+            raw_cookies = os.environ.get("FANTRAX_COOKIES", "")
 
             report["credentials_present"] = {
                 "league_id": bool(league_id),
+                "fx_rm": bool(fx_rm),
+                "fx_rm_length": len(fx_rm),
                 "jsessionid": bool(jsessionid),
                 "jsessionid_length": len(jsessionid),
+                "raw_cookies": bool(raw_cookies),
             }
 
-            if not (jsessionid and league_id):
-                report["error"] = "Missing FANTRAX_LEAGUE_ID or FANTRAX_JSESSIONID"
+            has_any_cookie = fx_rm or jsessionid or raw_cookies
+            if not (has_any_cookie and league_id):
+                report["error"] = (
+                    "Missing FANTRAX_LEAGUE_ID or cookies. "
+                    "Set at least one of: FANTRAX_FX_RM, FANTRAX_JSESSIONID, FANTRAX_COOKIES"
+                )
                 return self._send(200, report)
 
             report["steps"].append("importing fantrax_auth")
@@ -34,8 +43,13 @@ class handler(BaseHTTPRequestHandler):
                 report["import_error"] = f"{type(e).__name__}: {e}"
                 return self._send(200, report)
 
-            report["steps"].append("creating client with JSESSIONID")
-            api = FantraxAuthAPI(league_id, jsessionid=jsessionid)
+            report["steps"].append("creating client with cookies")
+            api = FantraxAuthAPI(
+                league_id,
+                fx_rm=fx_rm,
+                jsessionid=jsessionid,
+                raw_cookies=raw_cookies,
+            )
 
             try:
                 report["steps"].append("calling getLiveScoringStats")

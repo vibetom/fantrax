@@ -23,22 +23,36 @@ class handler(BaseHTTPRequestHandler):
 
             user_secret = os.environ.get("FANTRAX_USER_SECRET_ID", "")
             league_id = os.environ.get("FANTRAX_LEAGUE_ID", "")
+            fx_rm = os.environ.get("FANTRAX_FX_RM", "")
             jsessionid = os.environ.get("FANTRAX_JSESSIONID", "")
+            raw_cookies = os.environ.get("FANTRAX_COOKIES", "")
 
             # Public API (always available)
             public_api = FantraxAPI(user_secret, league_id)
 
-            # Authenticated API (requires JSESSIONID cookie from browser)
+            # Authenticated API (requires browser cookies)
             auth_api = None
-            auth_status = "skipped — no FANTRAX_JSESSIONID set"
-            if jsessionid:
-                auth_api = FantraxAuthAPI(league_id, jsessionid=jsessionid)
-                auth_status = "using JSESSIONID cookie"
+            auth_status = "skipped — no cookies set"
+            if fx_rm or jsessionid or raw_cookies:
+                auth_api = FantraxAuthAPI(
+                    league_id,
+                    fx_rm=fx_rm,
+                    jsessionid=jsessionid,
+                    raw_cookies=raw_cookies,
+                )
+                cookies_used = []
+                if fx_rm:
+                    cookies_used.append("FX_RM")
+                if jsessionid:
+                    cookies_used.append("JSESSIONID")
+                if raw_cookies:
+                    cookies_used.append(f"raw({len(raw_cookies)} chars)")
+                auth_status = f"using cookies: {', '.join(cookies_used)}"
 
             try:
                 bundle = collect_full_bundle(public_api, auth_api, period=period)
                 bundle["_meta"]["auth_status"] = auth_status
-                bundle["_meta"]["jsessionid_provided"] = bool(jsessionid)
+                bundle["_meta"]["cookies_provided"] = bool(fx_rm or jsessionid or raw_cookies)
             finally:
                 public_api.close()
                 if auth_api:

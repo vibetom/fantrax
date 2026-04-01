@@ -4,8 +4,10 @@ The public API (/fxea/general) doesn't expose player stats, transactions, or
 matchup scoring. The internal API that the Fantrax web app uses (/fxpa/req)
 has all of this, but requires session cookies from a logged-in browser session.
 
-Authentication uses a JSESSIONID cookie extracted from the user's browser.
-Set the FANTRAX_JSESSIONID environment variable with the cookie value.
+Authentication uses cookies extracted from the user's browser. The critical
+cookies are FX_RM (remember-me token) and JSESSIONID (session). Set them
+via FANTRAX_COOKIES env var as "name1=value1; name2=value2" format, or
+set individual FANTRAX_FX_RM and/or FANTRAX_JSESSIONID env vars.
 
 All parameter values must be strings (the Fantrax API expects "True" not true,
 "1" not 1). This matches the behavior of the known-working FantraxAPI library.
@@ -28,18 +30,33 @@ class FantraxAuthAPI:
     def __init__(
         self,
         league_id: str,
+        fx_rm: str = "",
         jsessionid: str = "",
+        raw_cookies: str = "",
     ) -> None:
         self.league_id = league_id
         cookies = httpx.Cookies()
+
+        # Parse raw cookie string (e.g. "FX_RM=abc123; JSESSIONID=xyz789")
+        if raw_cookies:
+            for part in raw_cookies.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    name, value = part.split("=", 1)
+                    cookies.set(name.strip(), value.strip(), domain=".fantrax.com")
+
+        # Individual cookie overrides
+        if fx_rm:
+            cookies.set("FX_RM", fx_rm, domain=".fantrax.com")
         if jsessionid:
             cookies.set("JSESSIONID", jsessionid, domain=".fantrax.com")
+
         self._client = httpx.Client(
             timeout=60,
             follow_redirects=True,
             cookies=cookies,
         )
-        self._logged_in = bool(jsessionid)
+        self._has_cookies = bool(fx_rm or jsessionid or raw_cookies)
 
     def close(self) -> None:
         self._client.close()
@@ -52,7 +69,7 @@ class FantraxAuthAPI:
 
     @property
     def is_logged_in(self) -> bool:
-        return self._logged_in
+        return self._has_cookies
 
     # ── Internal API helper ──────────────────────────────────────────
 
