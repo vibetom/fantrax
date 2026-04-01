@@ -102,11 +102,53 @@ def _build_cat_map(raw: dict) -> dict[str, dict[str, str]]:
                 cat_map[f"{group_id}#{scip_id}#{variant}"] = info
 
     # Also try tableHeaders if present (alternate response shape)
-    for header in raw.get("tableHeaders", []):
+    for header in raw.get("tableHeaders", []) if isinstance(raw.get("tableHeaders"), list) else []:
         scip_id = header.get("scipId", "")
         short_name = header.get("shortName", "")
         if scip_id and scip_id not in cat_map:
             cat_map[scip_id] = {"short": short_name, "name": header.get("name", short_name)}
+
+    # Try scoringCategoriesPerGroup (present in some response shapes)
+    for group_id, cat_list in _as_dict(raw.get("scoringCategoriesPerGroup")).items():
+        if not isinstance(cat_list, list):
+            continue
+        for cat in cat_list:
+            if not isinstance(cat, dict):
+                continue
+            scip_id = cat.get("id", cat.get("scipId", ""))
+            short_name = cat.get("shortName", "")
+            full_name = cat.get("name", short_name)
+            if scip_id and scip_id not in cat_map:
+                info = {"short": short_name, "name": full_name}
+                cat_map[scip_id] = info
+                for variant in ("-1", "0", "1"):
+                    compound = f"{group_id}#{scip_id}#{variant}"
+                    if compound not in cat_map:
+                        cat_map[compound] = info
+
+    # Known Fantrax MLB stat IDs as ultimate fallback
+    _KNOWN_STATS = {
+        "0010": "G", "0020": "GS", "0040": "AB", "0050": "PA",
+        "0060": "H", "0070": "1B", "0080": "2B", "0090": "3B",
+        "0100": "TB", "0110": "XBH", "0130": "BB", "0140": "IBB",
+        "0150": "HBP", "0160": "SF", "0170": "SAC", "0200": "HR",
+        "0310": "RBI", "0330": "R", "0350": "SO", "0360": "SV",
+        "0370": "CS", "0380": "SB", "0390": "GDP", "0400": "IP",
+        "0410": "K", "0420": "BB_P", "0430": "HA", "0440": "HRA",
+        "0450": "ER", "0460": "W", "0470": "L", "0480": "QS",
+        "0490": "ERA", "0500": "AVG", "0510": "OBP", "0520": "SLG",
+        "0530": "OPS", "0540": "CG", "0550": "SHO", "0560": "BSV",
+        "0570": "HLD", "0580": "WHIP",
+    }
+    for sid, short in _KNOWN_STATS.items():
+        if sid not in cat_map:
+            cat_map[sid] = {"short": short, "name": short}
+        # Also add compound forms for both hitting (10) and pitching (20) groups
+        for grp in ("10", "20"):
+            for variant in ("-1", "0", "1"):
+                compound = f"{grp}#{sid}#{variant}"
+                if compound not in cat_map:
+                    cat_map[compound] = {"short": short, "name": short}
 
     return cat_map
 
