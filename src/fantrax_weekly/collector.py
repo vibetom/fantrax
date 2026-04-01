@@ -271,7 +271,7 @@ def bundle_to_text(bundle: dict) -> str:
     errors = []
     for key, value in bundle.items():
         if isinstance(value, dict) and "error" in value:
-            errors.append(f"  - {value.get('_tag', key)}: {value['error']}")
+            errors.append(f"  - {key}: {value['error']}")
     if errors:
         lines.append("ERRORS ENCOUNTERED:")
         lines.extend(errors)
@@ -282,20 +282,9 @@ def bundle_to_text(bundle: dict) -> str:
             continue
 
         lines.append("=" * 80)
-
-        if isinstance(value, dict):
-            tag = value.get("_tag", key)
-            desc = value.get("_description", "")
-            lines.append(f"SECTION: {tag.upper()}")
-            if desc:
-                lines.append(f"DESCRIPTION: {desc}")
-            lines.append("=" * 80)
-            data = value.get("data", value)
-            lines.append(json.dumps(data, indent=2, default=str))
-        else:
-            lines.append(f"SECTION: {key.upper()}")
-            lines.append("=" * 80)
-            lines.append(json.dumps(value, indent=2, default=str))
+        lines.append(f"SECTION: {key.upper()}")
+        lines.append("=" * 80)
+        lines.append(json.dumps(value, indent=2, default=str))
 
         lines.append("")
 
@@ -305,14 +294,13 @@ def bundle_to_text(bundle: dict) -> str:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _safe_collect(tag: str, description: str, fn: callable) -> dict:
-    """Call fn() and wrap the result with tag/description, catching errors."""
+def _safe_collect_data(tag: str, fn: callable) -> dict | None:
+    """Call fn() and return the result directly, catching errors."""
     try:
-        data = fn()
-        return {"_tag": tag, "_description": description, "data": data}
+        return fn()
     except Exception as e:
         logger.warning("Failed to collect %s: %s", tag, e)
-        return {"_tag": tag, "_description": description, "error": str(e)}
+        return {"error": str(e)}
 
 
 def _safe_call(fn: callable, **kwargs) -> dict | None:
